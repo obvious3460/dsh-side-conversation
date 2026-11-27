@@ -15,4 +15,4 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 插件创建的侧边分支会从当前 DSH 客户端的左侧会话列表隐藏。关闭侧边标签后，插件会在分支空闲时尝试归档。旧版已关闭的分支需要在 DSH 中手动归档。
 
-追问页随 DSH 主题显示纯文本问答。附件、Markdown 格式、工具明细和审批请通过「打开完整会话」处理。无需 Atlas，无需构建。
+侧边回复使用 DSH 的 Markdown 渲染器，并随当前主题显示标题、列表、粗体和代码块。附件、工具明细和审批请通过「打开完整会话」处理。无需 Atlas，无需构建。

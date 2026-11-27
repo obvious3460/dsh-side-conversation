@@ -2,6 +2,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-side-conversation',
   factory(require) {
     const React = require('react')
+    const { MarkdownText } = require('@deepseek-ai/dsh-client-ui-primitives')
     const { createElement: h, useEffect, useState, useSyncExternalStore, useRef } = React
     const id = 'dsh-side-conversation'
     const seat = 'sidebar.right.pane.tab'
@@ -15,7 +16,9 @@ window.__ModuleLoader__.load({
       .dsh-side-chat details { max-height: 22%; overflow: auto; padding: 8px 12px; border: 1px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md, 10px); color: var(--dsw-alias-label-secondary); }
       .dsh-side-chat summary { cursor: pointer; }
       .dsh-side-chat details p { margin-top: 8px; }
-      .dsh-side-chat p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+      .dsh-side-chat-plain { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+      .dsh-side-chat-markdown { min-width: 0; overflow-wrap: anywhere; }
+      .dsh-side-chat-markdown pre { max-width: 100%; overflow: auto; }
       .dsh-side-chat-log { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; line-height: 1.65; }
       .dsh-side-chat-user { align-self: flex-end; max-width: 88%; box-sizing: border-box; padding: 8px 12px; border-radius: var(--dsw-radius-xl, 16px); background: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-1)); }
       .dsh-side-chat-muted { color: var(--dsw-alias-label-secondary); font-size: 12px; }
@@ -30,6 +33,14 @@ window.__ModuleLoader__.load({
       .dsh-side-chat button:disabled { opacity: .45; cursor: default; }
     `
     const errorText = error => error?.message || String(error)
+    const markdownLabels = {
+      code: {
+        copyLabel: '复制',
+        copiedLabel: '已复制',
+        toolbarLabels: { codeLabel: '代码', wrapLabel: '自动换行', unwrapLabel: '取消自动换行' }
+      },
+      footnotes: '脚注'
+    }
 
     function submitOnEnter(event) {
       if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
@@ -163,16 +174,20 @@ window.__ModuleLoader__.load({
           h('button', { type: 'button', onClick: openChild }, '打开完整会话')
         ),
         quote ? h('details', null,
-          h('summary', null, '选中的内容'), h('p', null, quote)
+          h('summary', null, '选中的内容'), h('p', { className: 'dsh-side-chat-plain' }, quote)
         ) : null,
         h('div', { role: 'log', 'aria-live': 'off', className: 'dsh-side-chat-log' },
           ...messages.map(message => h('article', {
             key: message.seq,
-            className: message.author === '你' ? 'dsh-side-chat-user' : undefined,
+            className: message.author === '你' ? 'dsh-side-chat-user' : 'dsh-side-chat-markdown',
             'aria-label': message.author
-          }, h('p', null, message.text)
+          }, message.author === '你'
+            ? h('p', { className: 'dsh-side-chat-plain' }, message.text)
+            : h(MarkdownText, { text: message.text, streaming: false, labels: markdownLabels })
           )),
-          partial ? h('p', { 'aria-label': 'AI' }, partial) : null,
+          partial ? h('div', { className: 'dsh-side-chat-markdown', 'aria-label': 'AI' },
+            h(MarkdownText, { text: partial, streaming: true, labels: markdownLabels })
+          ) : null,
           !messages.length && !partial && binding ? h('p', { className: 'dsh-side-chat-muted' }, '输入问题，从这段内容继续讨论。') : null
         ),
         h('div', { role: 'status', className: 'dsh-side-chat-muted' },
