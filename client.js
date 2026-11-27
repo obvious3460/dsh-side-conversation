@@ -242,6 +242,7 @@ window.__ModuleLoader__.load({
         let disposed = false
         let timer
         let markerTimer
+        let annotationEditor
         const actions = document.createElement('div')
         actions.hidden = true
         actions.setAttribute('role', 'group')
@@ -272,7 +273,7 @@ window.__ModuleLoader__.load({
         }
 
         function showSelection() {
-          if (opening) return
+          if (opening || annotationEditor) return
           const selection = window.getSelection()
           if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return dismiss()
           const parent = node => node?.nodeType === 1 ? node : node?.parentElement
@@ -331,7 +332,27 @@ window.__ModuleLoader__.load({
           }
         }
 
-        function addMarker(attachmentId, selection, number) {
+        function annotationFile(selection, number, note) {
+          const text = '原文：\n' + quoteDraft(selection.quote) + '批注：\n' + note + '\n'
+          return new File([text], `对话引用 ${number}.md`, { type: 'text/markdown' })
+        }
+
+        function placeAnnotation(card, anchorRect) {
+          Object.assign(card.style, {
+            position: 'fixed', zIndex: '10000', boxSizing: 'border-box',
+            width: 'min(360px, calc(100vw - 16px))', padding: '10px 12px', borderRadius: '12px', fontSize: '13px',
+            border: '1px solid var(--dsw-alias-border-l3, GrayText)',
+            boxShadow: 'var(--dsw-elevation-panel, 0 4px 16px #0003)',
+            background: 'var(--dsw-alias-bg-layer-1, Canvas)',
+            color: 'var(--dsw-alias-label-primary, CanvasText)'
+          })
+          if (!card.isConnected) document.body.append(card)
+          card.style.left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - card.offsetWidth - 8)) + 'px'
+          const above = anchorRect.top - card.offsetHeight - 8
+          card.style.top = Math.max(8, above >= 8 ? above : Math.min(anchorRect.bottom + 8, window.innerHeight - card.offsetHeight - 8)) + 'px'
+        }
+
+        function addMarker(attachmentId, selection, number, note) {
           const bubble = document.createElement('button')
           bubble.type = 'button'
           bubble.textContent = String(number)
@@ -346,7 +367,7 @@ window.__ModuleLoader__.load({
           let preview
           let closeTimer
           let editing = false
-          let text = selection.quote
+          let text = note
           function hide() {
             window.clearTimeout(closeTimer)
             preview?.remove()
@@ -370,7 +391,7 @@ window.__ModuleLoader__.load({
           function saveQuote(value) {
             const input = draftInput()
             const replacement = ctx.conversation.createDrafts(selection.parentId, [
-              new File([value + '\n'], `对话引用 ${number}.md`, { type: 'text/markdown' })
+              annotationFile(selection, number, value)
             ])[0]
             let attached = false
             try {
@@ -406,6 +427,9 @@ window.__ModuleLoader__.load({
             label.style.cssText = 'font-size:12px;color:var(--dsw-alias-label-secondary);margin-bottom:4px'
             const content = document.createElement('div')
             content.textContent = text
+            const source = document.createElement('blockquote')
+            source.textContent = selection.quote
+            source.style.cssText = 'margin:4px 0 8px;padding-left:8px;border-left:2px solid var(--dsw-alias-border-l3);max-height:5em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)'
             content.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:6'
             const controls = document.createElement('div')
             controls.style.display = 'flex'
@@ -433,7 +457,7 @@ window.__ModuleLoader__.load({
               content.replaceWith(field)
               controls.replaceChildren(control('保存', () => {
                 const value = field.value.trim()
-                if (!value) throw new Error('引用不能为空')
+                if (!value) throw new Error('批注不能为空')
                 if (value !== text) saveQuote(value)
                 hide()
                 if (anchor.isConnected) show(anchor)
@@ -441,20 +465,8 @@ window.__ModuleLoader__.load({
               field.focus()
             }), control('删除', deleteQuote))
             header.append(label, controls)
-            preview.append(header, content, status)
-            Object.assign(preview.style, {
-              position: 'fixed', zIndex: '10000',
-              boxSizing: 'border-box', width: 'min(360px, calc(100vw - 16px))',
-              padding: '10px 12px', borderRadius: '12px', fontSize: '13px',
-              border: '1px solid var(--dsw-alias-border-l3, GrayText)',
-              boxShadow: 'var(--dsw-elevation-panel, 0 4px 16px #0003)',
-              background: 'var(--dsw-alias-bg-layer-1, Canvas)',
-              color: 'var(--dsw-alias-label-primary, CanvasText)'
-            })
-            document.body.append(preview)
-            preview.style.left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - preview.offsetWidth - 8)) + 'px'
-            const above = anchorRect.top - preview.offsetHeight - 8
-            preview.style.top = (above >= 8 ? above : Math.min(anchorRect.bottom + 8, window.innerHeight - preview.offsetHeight - 8)) + 'px'
+            preview.append(header, source, content, status)
+            placeAnnotation(preview, anchorRect)
           }
           function jump() {
             hide()
@@ -475,33 +487,73 @@ window.__ModuleLoader__.load({
           if (markers.size && markerTimer === undefined) markerTimer = window.setInterval(updateMarkers, 350)
         }
 
-        function addToChat() {
-          if (!selected || opening) return
-          const selection = selected
-          const { parentId, quote, conversation } = selected
-          if (!conversation.isConnected) return dismiss()
+        function saveAnnotation(selection, note) {
+          const { parentId, conversation } = selection
+          if (!conversation.isConnected) throw new Error('原对话已关闭')
+          const binding = ctx.sessions.binding(parentId)
+          if (!binding) throw new Error('会话已关闭，请重新选择文字')
+          const input = ctx.conversation.input.for(binding.ctx)
+          const number = (nextNumbers.get(parentId) ?? 0) + 1
+          const file = annotationFile(selection, number, note)
+          const drafts = ctx.conversation.createDrafts(parentId, [file])
           try {
-            const binding = ctx.sessions.binding(parentId)
-            if (!binding) throw new Error('会话已关闭，请重新选择文字')
-            const input = ctx.conversation.input.for(binding.ctx)
-            const number = (nextNumbers.get(parentId) ?? 0) + 1
-            const file = new File([quote + '\n'], `对话引用 ${number}.md`, { type: 'text/markdown' })
-            const drafts = ctx.conversation.createDrafts(parentId, [file])
-            try {
-              if (!input.addAttachments(drafts.map(draft => draft.id))) throw new Error('输入框忙，请重试')
-            } catch (error) {
-              ctx.conversation.releaseDraftAttachments(drafts)
-              throw error
-            }
-            nextNumbers.set(parentId, number)
-            addMarker(drafts[0].id, selection, number)
-            window.getSelection()?.removeAllRanges()
-            dismiss()
-            conversation.querySelector('[data-composer-input][contenteditable="true"]')?.focus()
+            if (!input.addAttachments(drafts.map(draft => draft.id))) throw new Error('输入框忙，请重试')
           } catch (error) {
-            addButton.textContent = '添加失败，点击重试'
-            addButton.title = errorText(error)
+            ctx.conversation.releaseDraftAttachments(drafts)
+            throw error
           }
+          nextNumbers.set(parentId, number)
+          addMarker(drafts[0].id, selection, number, note)
+        }
+
+        function closeAnnotationEditor() {
+          annotationEditor?.card.remove()
+          annotationEditor = undefined
+        }
+
+        function addToChat() {
+          if (!selected || opening || annotationEditor) return
+          const selection = selected
+          if (!selection.conversation.isConnected) return dismiss()
+          const card = document.createElement('form')
+          card.setAttribute('aria-label', '添加批注')
+          const source = document.createElement('blockquote')
+          source.textContent = selection.quote
+          source.style.cssText = 'margin:0 0 8px;max-height:5em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)'
+          const field = document.createElement('textarea')
+          field.setAttribute('aria-label', '批注内容')
+          field.placeholder = '写下你的批注…'
+          field.rows = 3
+          field.maxLength = 6000
+          field.required = true
+          field.style.cssText = 'width:100%;box-sizing:border-box;background:transparent;color:inherit;font:inherit'
+          const status = document.createElement('div')
+          status.setAttribute('role', 'status')
+          const cancel = document.createElement('button')
+          cancel.type = 'button'
+          cancel.textContent = '取消'
+          cancel.addEventListener('click', closeAnnotationEditor)
+          const save = document.createElement('button')
+          save.type = 'submit'
+          save.textContent = '保存引用'
+          card.addEventListener('submit', event => {
+            event.preventDefault()
+            const note = field.value.trim()
+            if (!note) { status.textContent = '请先输入批注'; return }
+            try {
+              saveAnnotation(selection, note)
+              closeAnnotationEditor()
+              selection.conversation.querySelector('[data-composer-input][contenteditable="true"]')?.focus()
+            } catch (error) {
+              status.textContent = errorText(error)
+            }
+          })
+          card.append(source, field, status, cancel, save)
+          annotationEditor = { card, range: selection.range }
+          dismiss()
+          window.getSelection()?.removeAllRanges()
+          placeAnnotation(card, selection.range.getBoundingClientRect())
+          field.focus()
         }
 
         async function openBranch() {
@@ -552,8 +604,13 @@ window.__ModuleLoader__.load({
         }
         const preserve = event => event.preventDefault()
         const hidePreviews = () => { for (const { hide } of markers.values()) hide() }
-        const escape = event => { if (event.key === 'Escape') { dismiss(); hidePreviews() } }
-        const onScroll = () => { dismiss(); hidePreviews(); updateMarkers() }
+        const escape = event => { if (event.key === 'Escape') { dismiss(); closeAnnotationEditor(); hidePreviews() } }
+        const onScroll = () => {
+          dismiss()
+          hidePreviews()
+          updateMarkers()
+          if (annotationEditor) placeAnnotation(annotationEditor.card, annotationEditor.range.getBoundingClientRect())
+        }
         actions.addEventListener('mousedown', preserve)
         addButton.addEventListener('click', addToChat)
         button.addEventListener('click', openBranch)
@@ -571,6 +628,7 @@ window.__ModuleLoader__.load({
           window.clearInterval(markerTimer)
           for (const { bubble, hide } of markers.values()) { hide(); bubble.remove() }
           markers.clear()
+          closeAnnotationEditor()
           actions.remove()
         }
       })
