@@ -204,6 +204,8 @@ window.__ModuleLoader__.load({
         let opening = false
         let disposed = false
         let timer
+        let markerTimer
+        const markers = new Map()
         const actions = document.createElement('div')
         actions.hidden = true
         actions.setAttribute('role', 'group')
@@ -247,8 +249,9 @@ window.__ModuleLoader__.load({
           const quote = selection.toString().trim()
           const parentId = conversation?.dataset.conversationSession
           if (!quote || !parentId) return dismiss()
-          const rect = selection.getRangeAt(0).getBoundingClientRect()
-          selected = { parentId, turn, quote: quote.slice(0, 6000), conversation }
+          const range = selection.getRangeAt(0)
+          const rect = range.getBoundingClientRect()
+          selected = { parentId, turn, quote: quote.slice(0, 6000), conversation, scroll, range: range.cloneRange() }
           button.hidden = Boolean(conversation.closest('[data-dsh-side-chat]'))
           button.textContent = '侧边追问'
           addButton.textContent = '添加到聊天'
@@ -258,21 +261,68 @@ window.__ModuleLoader__.load({
           actions.style.top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 46)) + 'px'
         }
 
+        function updateMarkers() {
+          for (const [attachmentId, { bubble, range, conversation, scroll }] of markers) {
+            if (ctx.conversation.resolveDraftAttachments([attachmentId]).length === 0) {
+              bubble.remove()
+              markers.delete(attachmentId)
+              continue
+            }
+            const rect = range.getClientRects()
+            const lastLine = rect[rect.length - 1]
+            const viewport = scroll.getBoundingClientRect()
+            bubble.hidden = !conversation.isConnected || viewport.width === 0 || !lastLine ||
+              lastLine.bottom < viewport.top || lastLine.bottom > viewport.bottom
+            if (bubble.hidden) continue
+            bubble.style.left = Math.max(viewport.left + 4, Math.min(lastLine.right + 4, viewport.right - 28, window.innerWidth - 28)) + 'px'
+            bubble.style.top = Math.max(viewport.top, lastLine.top - 5) + 'px'
+          }
+          if (!markers.size && markerTimer !== undefined) {
+            window.clearInterval(markerTimer)
+            markerTimer = undefined
+          }
+        }
+
+        function addMarker(attachmentId, selection) {
+          const bubble = document.createElement('button')
+          bubble.type = 'button'
+          bubble.textContent = '引'
+          bubble.title = selection.quote
+          bubble.setAttribute('aria-label', '原文引用，点击回到输入框')
+          Object.assign(bubble.style, {
+            position: 'fixed', zIndex: '9998', minWidth: '22px', height: '22px',
+            borderRadius: '11px', cursor: 'pointer', fontSize: '11px', padding: '0 4px',
+            border: '1px solid var(--dsw-alias-border-l3, GrayText)',
+            background: 'var(--dsw-alias-bg-layer-1, Canvas)',
+            color: 'var(--dsw-alias-label-primary, CanvasText)'
+          })
+          bubble.addEventListener('click', () => {
+            selection.conversation.querySelector('[data-composer-input][contenteditable="true"]')?.focus()
+          })
+          markers.set(attachmentId, { ...selection, bubble })
+          document.body.append(bubble)
+          updateMarkers()
+          if (markers.size && markerTimer === undefined) markerTimer = window.setInterval(updateMarkers, 350)
+        }
+
         function addToChat() {
           if (!selected || opening) return
+          const selection = selected
           const { parentId, quote, conversation } = selected
           if (!conversation.isConnected) return dismiss()
           try {
             const binding = ctx.sessions.binding(parentId)
             if (!binding) throw new Error('会话已关闭，请重新选择文字')
-            const result = ctx.conversation.input.requestDraftInitialization(binding, {
-              prompt: quoteDraft(quote),
-              whenDraftExists: 'append'
-            })
-            if (result === 'blocked') {
-              addButton.textContent = '输入框忙，请重试'
-              return
+            const input = ctx.conversation.input.for(binding.ctx)
+            const file = new File([quote + '\n'], '对话引用.md', { type: 'text/markdown' })
+            const drafts = ctx.conversation.createDrafts(parentId, [file])
+            try {
+              if (!input.addAttachments(drafts.map(draft => draft.id))) throw new Error('输入框忙，请重试')
+            } catch (error) {
+              ctx.conversation.releaseDraftAttachments(drafts)
+              throw error
             }
+            addMarker(drafts[0].id, selection)
             window.getSelection()?.removeAllRanges()
             dismiss()
             conversation.querySelector('[data-composer-input][contenteditable="true"]')?.focus()
@@ -330,18 +380,23 @@ window.__ModuleLoader__.load({
         }
         const preserve = event => event.preventDefault()
         const escape = event => { if (event.key === 'Escape') dismiss() }
+        const onScroll = () => { dismiss(); updateMarkers() }
         actions.addEventListener('mousedown', preserve)
         addButton.addEventListener('click', addToChat)
         button.addEventListener('click', openBranch)
         document.addEventListener('selectionchange', scheduleSelection)
         document.addEventListener('keydown', escape)
-        document.addEventListener('scroll', dismiss, true)
+        document.addEventListener('scroll', onScroll, true)
+        window.addEventListener('resize', updateMarkers)
         return () => {
           disposed = true
           window.clearTimeout(timer)
           document.removeEventListener('selectionchange', scheduleSelection)
           document.removeEventListener('keydown', escape)
-          document.removeEventListener('scroll', dismiss, true)
+          document.removeEventListener('scroll', onScroll, true)
+          window.removeEventListener('resize', updateMarkers)
+          window.clearInterval(markerTimer)
+          for (const { bubble } of markers.values()) bubble.remove()
           actions.remove()
         }
       })
