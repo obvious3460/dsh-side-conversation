@@ -517,25 +517,21 @@ window.__ModuleLoader__.load({
           if (!selection.conversation.isConnected) return dismiss()
           const card = document.createElement('form')
           card.setAttribute('aria-label', '添加批注')
-          const source = document.createElement('blockquote')
-          source.textContent = selection.quote
-          source.style.cssText = 'margin:0 0 8px;max-height:5em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)'
+          const row = document.createElement('div')
+          row.style.cssText = 'display:flex;align-items:center;gap:8px'
           const field = document.createElement('textarea')
           field.setAttribute('aria-label', '批注内容')
           field.placeholder = '写下你的批注…'
-          field.rows = 3
+          field.rows = 2
           field.maxLength = 6000
           field.required = true
-          field.style.cssText = 'width:100%;box-sizing:border-box;background:transparent;color:inherit;font:inherit'
+          field.style.cssText = 'flex:1;min-width:0;box-sizing:border-box;resize:vertical;border:1px solid var(--dsw-alias-border-l3, GrayText);border-radius:6px;padding:5px 7px;background:transparent;color:inherit;font:inherit'
           const status = document.createElement('div')
           status.setAttribute('role', 'status')
-          const cancel = document.createElement('button')
-          cancel.type = 'button'
-          cancel.textContent = '取消'
-          cancel.addEventListener('click', closeAnnotationEditor)
           const save = document.createElement('button')
           save.type = 'submit'
-          save.textContent = '保存引用'
+          save.textContent = '确定'
+          save.style.cssText = 'flex:none;padding:5px 10px;border:1px solid var(--dsw-alias-border-l3, GrayText);border-radius:6px;background:var(--dsw-alias-button-floating-fill, ButtonFace);color:inherit;font:inherit;white-space:nowrap;cursor:pointer'
           card.addEventListener('submit', event => {
             event.preventDefault()
             const note = field.value.trim()
@@ -548,7 +544,8 @@ window.__ModuleLoader__.load({
               status.textContent = errorText(error)
             }
           })
-          card.append(source, field, status, cancel, save)
+          row.append(field, save)
+          card.append(row, status)
           annotationEditor = { card, range: selection.range }
           dismiss()
           window.getSelection()?.removeAllRanges()
