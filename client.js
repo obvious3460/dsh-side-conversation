@@ -9,8 +9,26 @@ window.__ModuleLoader__.load({
     const empty = Object.freeze([])
     const noopSubscribe = () => () => {}
     const emptySnapshot = () => null
-    const smallText = { fontSize: 12, opacity: 0.8 }
-    const breakText = { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: 0 }
+    const panelStyle = `
+      .dsh-side-chat { height: 100%; min-height: 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px; padding: 16px; color: var(--dsw-alias-label-primary); font-size: var(--dsh-content-font-size, 14px); }
+      .dsh-side-chat header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .dsh-side-chat details { max-height: 22%; overflow: auto; padding: 8px 12px; border: 1px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md, 10px); color: var(--dsw-alias-label-secondary); }
+      .dsh-side-chat summary { cursor: pointer; }
+      .dsh-side-chat details p { margin-top: 8px; }
+      .dsh-side-chat p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+      .dsh-side-chat-log { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; line-height: 1.65; }
+      .dsh-side-chat-user { align-self: flex-end; max-width: 88%; box-sizing: border-box; padding: 8px 12px; border-radius: var(--dsw-radius-xl, 16px); background: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-1)); }
+      .dsh-side-chat-muted { color: var(--dsw-alias-label-secondary); font-size: 12px; }
+      .dsh-side-chat [role="status"]:empty { display: none; }
+      .dsh-side-chat form { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xl, 16px); background: var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-1)); }
+      .dsh-side-chat form:focus-within { border-color: var(--dsw-focus-ring-color, Highlight); }
+      .dsh-side-chat textarea { width: 100%; box-sizing: border-box; resize: vertical; border: 0; outline: none; background: transparent; color: inherit; font: inherit; }
+      .dsh-side-chat textarea::placeholder { color: var(--dsw-alias-label-tertiary); }
+      .dsh-side-chat button { border: 0; border-radius: var(--dsw-radius-md, 10px); padding: 6px 10px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+      .dsh-side-chat button:hover:enabled { background: var(--dsw-alias-interactive-bg-hover); }
+      .dsh-side-chat button[type="submit"] { align-self: flex-end; background: var(--dsw-alias-button-floating-fill, var(--dsw-alias-bg-layer-1)); }
+      .dsh-side-chat button:disabled { opacity: .45; cursor: default; }
+    `
     const errorText = error => error?.message || String(error)
 
     function activeSession(sessions) {
@@ -132,29 +150,32 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return h('section', { 'aria-label': '侧边追问', style: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', padding: 12, gap: 10, boxSizing: 'border-box' } },
-        h('header', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 } },
+      return h('section', { 'aria-label': '侧边追问', className: 'dsh-side-chat' },
+        h('style', null, panelStyle),
+        h('header', null,
           h('strong', null, '侧边追问'),
-          h('button', { type: 'button', onClick: openChild, style: smallText }, '打开完整会话')
+          h('button', { type: 'button', onClick: openChild }, '打开完整会话')
         ),
-        h('details', { style: { ...smallText, maxHeight: '22%', overflow: 'auto' } },
-          h('summary', null, '选中的内容'), h('p', { style: breakText }, quote)
+        h('details', null,
+          h('summary', null, '选中的内容'), h('p', null, quote)
         ),
-        h('div', { role: 'log', 'aria-live': 'off', style: { flex: 1, minHeight: 0, overflow: 'auto', display: 'grid', alignContent: 'start', gap: 12 } },
-          ...messages.map(message => h('article', { key: message.seq },
-            h('strong', { style: smallText }, message.author), h('p', { style: breakText }, message.text)
+        h('div', { role: 'log', 'aria-live': 'off', className: 'dsh-side-chat-log' },
+          ...messages.map(message => h('article', {
+            key: message.seq,
+            className: message.author === '你' ? 'dsh-side-chat-user' : undefined,
+            'aria-label': message.author
+          }, h('p', null, message.text)
           )),
-          partial ? h('p', { style: breakText }, partial) : null,
-          !messages.length && !partial && binding ? h('p', { style: smallText }, '输入问题，从这段内容继续讨论。') : null
+          partial ? h('p', { 'aria-label': 'AI' }, partial) : null,
+          !messages.length && !partial && binding ? h('p', { className: 'dsh-side-chat-muted' }, '输入问题，从这段内容继续讨论。') : null
         ),
-        h('div', { role: 'status', style: smallText },
+        h('div', { role: 'status', className: 'dsh-side-chat-muted' },
           error || state?.lastAgentError?.message || (!binding ? '正在加载分支…' : state?.running ? '分支正在回复。如需审批，可打开完整会话。' : '')
         ),
-        h('form', { onSubmit: send, style: { display: 'grid', gap: 6 } },
+        h('form', { onSubmit: send },
           h('textarea', {
             'aria-label': '追问内容', placeholder: '输入追问…', value: draft, rows: 3,
-            onChange: event => setDraft(event.target.value),
-            style: { width: '100%', boxSizing: 'border-box', padding: 8, resize: 'vertical' }
+            onChange: event => setDraft(event.target.value)
           }),
           h('button', { type: 'submit', disabled: !binding || busy || !draft.trim() }, busy ? '正在发送…' : '发送到分支')
         )
@@ -209,7 +230,9 @@ window.__ModuleLoader__.load({
         button.hidden = true
         Object.assign(button.style, {
           position: 'fixed', zIndex: '9999', padding: '6px 12px', borderRadius: '8px',
-          border: '1px solid GrayText', background: 'Canvas', color: 'CanvasText', cursor: 'pointer'
+          border: '1px solid var(--dsw-alias-border-l3, GrayText)',
+          background: 'var(--dsw-alias-bg-layer-1, Canvas)',
+          color: 'var(--dsw-alias-label-primary, CanvasText)', cursor: 'pointer'
         })
         document.body.append(button)
 
@@ -242,7 +265,8 @@ window.__ModuleLoader__.load({
 
         async function openBranch() {
           if (!selected || opening) return
-          const { parentId, turn, quote } = selected
+          const selection = selected
+          const { parentId, turn, quote } = selection
           if (activeSession(ctx.sessions) !== parentId) return dismiss()
           const binding = ctx.sessions.binding(parentId)
           const atSeq = completedTurn(binding, turn)
@@ -259,7 +283,13 @@ window.__ModuleLoader__.load({
           button.disabled = true
           button.textContent = '正在创建分支…'
           try {
-            const childId = await ctx.sessions.fork({ sessionId: parentId, atSeq })
+            const childId = selection.childId ?? await ctx.sessions.fork({ sessionId: parentId, atSeq })
+            selection.childId = childId
+            if (!selection.archived) {
+              button.textContent = '正在隐藏侧边分支…'
+              await ctx.uiWorkspace.archiveSession(childId)
+              selection.archived = true
+            }
             if (disposed || activeSession(ctx.sessions) !== parentId) return
             const emptyTab = emptyTabs.get(parentId)
             ctx.sidebarRight.openTab(id, {
