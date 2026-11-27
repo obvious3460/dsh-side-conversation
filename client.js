@@ -2,7 +2,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-side-conversation',
   factory(require) {
     const React = require('react')
-    const { createElement: h, useEffect, useState, useRef } = React
+    const { createElement: h, useEffect, useState, useRef, useSyncExternalStore } = React
     const id = 'dsh-side-conversation'
     const seat = 'sidebar.right.pane.tab'
     const answer = '[data-chat-flow-kind="assistant-step"][data-chat-turn]'
@@ -37,6 +37,40 @@ window.__ModuleLoader__.load({
       const emptyTabs = new Map()
       const trackedTabs = new WeakSet()
       const initializedQuotes = new Set()
+      const markers = new Map()
+      const nextNumbers = new Map()
+      const quoteListeners = new Set()
+      let quoteSnapshot = []
+      const subscribeQuotes = listener => {
+        quoteListeners.add(listener)
+        return () => quoteListeners.delete(listener)
+      }
+      const getQuotes = () => quoteSnapshot
+
+      function publishQuotes() {
+        quoteSnapshot = [...markers.values()]
+        for (const listener of quoteListeners) listener()
+      }
+
+      function QuoteNavigation({ sessionId }) {
+        const quotes = useSyncExternalStore(subscribeQuotes, getQuotes)
+        const current = quotes.filter(quote => quote.parentId === sessionId)
+        if (!current.length) return null
+        return h('div', { role: 'group', 'aria-label': '跳转到对话引用', style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
+          current.map(quote => h('button', {
+            key: quote.attachmentId, type: 'button',
+            'aria-label': `跳转到引用 ${quote.number}`,
+            style: {
+              border: '1px solid var(--dsw-alias-border-l3)', borderRadius: '10px',
+              padding: '1px 7px', background: 'var(--dsw-alias-bg-layer-1)',
+              color: 'var(--dsw-alias-label-primary)', cursor: 'pointer'
+            },
+            onMouseEnter: event => quote.show(event.currentTarget),
+            onFocus: event => quote.show(event.currentTarget),
+            onMouseLeave: quote.hide, onBlur: quote.hide, onClick: quote.jump
+          }, String(quote.number)))
+        )
+      }
       const storageKey = 'dsh-side-conversation.hidden-branches'
       const hiddenBranches = new Set()
       const rowStyle = document.createElement('style')
@@ -198,6 +232,9 @@ window.__ModuleLoader__.load({
         key: id,
         children: { 'dsh-side-conversation.scope': { kind: 'single', scope: 'session' } }
       }, SideTab))
+      ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+        name: 'conversation.composer.dock', id: 'dsh-side-conversation-quotes', order: -10
+      }, QuoteNavigation))
 
       ctx.effect(() => {
         let selected
@@ -205,7 +242,6 @@ window.__ModuleLoader__.load({
         let disposed = false
         let timer
         let markerTimer
-        const markers = new Map()
         const actions = document.createElement('div')
         actions.hidden = true
         actions.setAttribute('role', 'group')
@@ -251,7 +287,7 @@ window.__ModuleLoader__.load({
           if (!quote || !parentId) return dismiss()
           const range = selection.getRangeAt(0)
           const rect = range.getBoundingClientRect()
-          selected = { parentId, turn, quote: quote.slice(0, 6000), conversation, scroll, range: range.cloneRange() }
+          selected = { parentId, turn, quote: quote.slice(0, 6000), conversation, scroll, source: start, range: range.cloneRange() }
           button.hidden = Boolean(conversation.closest('[data-dsh-side-chat]'))
           button.textContent = '侧边追问'
           addButton.textContent = '添加到聊天'
@@ -262,10 +298,13 @@ window.__ModuleLoader__.load({
         }
 
         function updateMarkers() {
-          for (const [attachmentId, { bubble, range, conversation, scroll }] of markers) {
+          let removed = false
+          for (const [attachmentId, { bubble, range, conversation, scroll, hide }] of markers) {
             if (ctx.conversation.resolveDraftAttachments([attachmentId]).length === 0) {
+              hide()
               bubble.remove()
               markers.delete(attachmentId)
+              removed = true
               continue
             }
             const rect = range.getClientRects()
@@ -277,18 +316,18 @@ window.__ModuleLoader__.load({
             bubble.style.left = Math.max(viewport.left + 4, Math.min(lastLine.right + 4, viewport.right - 28, window.innerWidth - 28)) + 'px'
             bubble.style.top = Math.max(viewport.top, lastLine.top - 5) + 'px'
           }
+          if (removed) publishQuotes()
           if (!markers.size && markerTimer !== undefined) {
             window.clearInterval(markerTimer)
             markerTimer = undefined
           }
         }
 
-        function addMarker(attachmentId, selection) {
+        function addMarker(attachmentId, selection, number) {
           const bubble = document.createElement('button')
           bubble.type = 'button'
-          bubble.textContent = '引'
-          bubble.title = selection.quote
-          bubble.setAttribute('aria-label', '原文引用，点击回到输入框')
+          bubble.textContent = String(number)
+          bubble.setAttribute('aria-label', `跳转到引用 ${number}`)
           Object.assign(bubble.style, {
             position: 'fixed', zIndex: '9998', minWidth: '22px', height: '22px',
             borderRadius: '11px', cursor: 'pointer', fontSize: '11px', padding: '0 4px',
@@ -296,10 +335,51 @@ window.__ModuleLoader__.load({
             background: 'var(--dsw-alias-bg-layer-1, Canvas)',
             color: 'var(--dsw-alias-label-primary, CanvasText)'
           })
-          bubble.addEventListener('click', () => {
-            selection.conversation.querySelector('[data-composer-input][contenteditable="true"]')?.focus()
-          })
-          markers.set(attachmentId, { ...selection, bubble })
+          let preview
+          function hide() {
+            preview?.remove()
+            preview = undefined
+          }
+          function show(anchor) {
+            hide()
+            const anchorRect = anchor.getBoundingClientRect()
+            preview = document.createElement('div')
+            preview.setAttribute('role', 'tooltip')
+            const label = document.createElement('div')
+            label.textContent = `${number}. 所选文字`
+            label.style.cssText = 'font-size:12px;color:var(--dsw-alias-label-secondary);margin-bottom:4px'
+            const content = document.createElement('div')
+            content.textContent = selection.quote
+            content.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:6'
+            preview.append(label, content)
+            Object.assign(preview.style, {
+              position: 'fixed', zIndex: '10000', pointerEvents: 'none',
+              boxSizing: 'border-box', width: 'min(360px, calc(100vw - 16px))',
+              padding: '10px 12px', borderRadius: '12px', fontSize: '13px',
+              border: '1px solid var(--dsw-alias-border-l3, GrayText)',
+              boxShadow: 'var(--dsw-elevation-panel, 0 4px 16px #0003)',
+              background: 'var(--dsw-alias-bg-layer-1, Canvas)',
+              color: 'var(--dsw-alias-label-primary, CanvasText)'
+            })
+            document.body.append(preview)
+            preview.style.left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - preview.offsetWidth - 8)) + 'px'
+            const above = anchorRect.top - preview.offsetHeight - 8
+            preview.style.top = (above >= 8 ? above : Math.min(anchorRect.bottom + 8, window.innerHeight - preview.offsetHeight - 8)) + 'px'
+          }
+          function jump() {
+            hide()
+            const target = selection.source.isConnected ? selection.source :
+              [...selection.conversation.querySelectorAll(answer)].find(row => row.dataset.chatTurn === selection.turn)
+            target?.scrollIntoView({ block: 'center', behavior: 'instant' })
+            target?.animate?.([{ backgroundColor: 'var(--dsw-alias-interactive-bg-hover)' }, { backgroundColor: 'transparent' }], 900)
+          }
+          bubble.addEventListener('mouseenter', () => show(bubble))
+          bubble.addEventListener('focus', () => show(bubble))
+          bubble.addEventListener('mouseleave', hide)
+          bubble.addEventListener('blur', hide)
+          bubble.addEventListener('click', jump)
+          markers.set(attachmentId, { ...selection, attachmentId, number, bubble, show, hide, jump })
+          publishQuotes()
           document.body.append(bubble)
           updateMarkers()
           if (markers.size && markerTimer === undefined) markerTimer = window.setInterval(updateMarkers, 350)
@@ -314,7 +394,8 @@ window.__ModuleLoader__.load({
             const binding = ctx.sessions.binding(parentId)
             if (!binding) throw new Error('会话已关闭，请重新选择文字')
             const input = ctx.conversation.input.for(binding.ctx)
-            const file = new File([quote + '\n'], '对话引用.md', { type: 'text/markdown' })
+            const number = (nextNumbers.get(parentId) ?? 0) + 1
+            const file = new File([quote + '\n'], `对话引用 ${number}.md`, { type: 'text/markdown' })
             const drafts = ctx.conversation.createDrafts(parentId, [file])
             try {
               if (!input.addAttachments(drafts.map(draft => draft.id))) throw new Error('输入框忙，请重试')
@@ -322,7 +403,8 @@ window.__ModuleLoader__.load({
               ctx.conversation.releaseDraftAttachments(drafts)
               throw error
             }
-            addMarker(drafts[0].id, selection)
+            nextNumbers.set(parentId, number)
+            addMarker(drafts[0].id, selection, number)
             window.getSelection()?.removeAllRanges()
             dismiss()
             conversation.querySelector('[data-composer-input][contenteditable="true"]')?.focus()
@@ -379,8 +461,9 @@ window.__ModuleLoader__.load({
           timer = window.setTimeout(showSelection, 90)
         }
         const preserve = event => event.preventDefault()
-        const escape = event => { if (event.key === 'Escape') dismiss() }
-        const onScroll = () => { dismiss(); updateMarkers() }
+        const hidePreviews = () => { for (const { hide } of markers.values()) hide() }
+        const escape = event => { if (event.key === 'Escape') { dismiss(); hidePreviews() } }
+        const onScroll = () => { dismiss(); hidePreviews(); updateMarkers() }
         actions.addEventListener('mousedown', preserve)
         addButton.addEventListener('click', addToChat)
         button.addEventListener('click', openBranch)
@@ -396,7 +479,8 @@ window.__ModuleLoader__.load({
           document.removeEventListener('scroll', onScroll, true)
           window.removeEventListener('resize', updateMarkers)
           window.clearInterval(markerTimer)
-          for (const { bubble } of markers.values()) bubble.remove()
+          for (const { bubble, hide } of markers.values()) { hide(); bubble.remove() }
+          markers.clear()
           actions.remove()
         }
       })
