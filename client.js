@@ -31,6 +31,12 @@ window.__ModuleLoader__.load({
     `
     const errorText = error => error?.message || String(error)
 
+    function submitOnEnter(event) {
+      if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+      event.preventDefault()
+      event.currentTarget.form?.requestSubmit()
+    }
+
     function activeSession(sessions) {
       const list = sessions.list.getSnapshot()
       const active = Object.values(list.byId).filter(item => item.retainedBy?.mainView > 0)
@@ -175,7 +181,8 @@ window.__ModuleLoader__.load({
         h('form', { onSubmit: send },
           h('textarea', {
             'aria-label': '追问内容', placeholder: '输入追问…', value: draft, rows: 3,
-            onChange: event => setDraft(event.target.value)
+            onChange: event => setDraft(event.target.value),
+            onKeyDown: submitOnEnter
           }),
           h('button', { type: 'submit', disabled: !binding || busy || !draft.trim() }, busy ? '正在发送…' : '发送到分支')
         )
@@ -231,7 +238,7 @@ window.__ModuleLoader__.load({
                 if (!result.ok) throw new Error(result.error?.message || 'DSH 未接受这条消息')
                 branch.sent = true
               }
-              if (activeSession(ctx.sessions) !== parentId) throw new Error('消息已发送，请从归档会话查看回复')
+              if (activeSession(ctx.sessions) !== parentId) throw new Error('消息已发送，请切回原主聊天后重试打开')
               ctx.sidebarRight.openTab(id, {
                 replaceTab: tab.id,
                 params: { childId: branch.childId, atSeq: branch.atSeq, quote: '' }
@@ -254,7 +261,7 @@ window.__ModuleLoader__.load({
           ),
           h('div', { role: 'status', className: 'dsh-side-chat-muted' }, error),
           h('form', { onSubmit: start },
-            h('textarea', { 'aria-label': '追问内容', placeholder: '输入追问…', rows: 3, value: draft, onChange: event => setDraft(event.target.value) }),
+            h('textarea', { 'aria-label': '追问内容', placeholder: '输入追问，Enter 发送，Shift+Enter 换行', rows: 3, value: draft, onChange: event => setDraft(event.target.value), onKeyDown: submitOnEnter }),
             h('button', { type: 'submit', disabled: busy || !draft.trim() }, busy ? '正在发送…' : '发送')
           )
         )
