@@ -67,7 +67,7 @@ window.__ModuleLoader__.load({
             },
             onMouseEnter: event => quote.show(event.currentTarget),
             onFocus: event => quote.show(event.currentTarget),
-            onMouseLeave: quote.hide, onBlur: quote.hide, onClick: quote.jump
+            onMouseLeave: quote.scheduleHide, onBlur: quote.scheduleHide, onClick: quote.jump
           }, String(quote.number)))
         )
       }
@@ -313,8 +313,16 @@ window.__ModuleLoader__.load({
             bubble.hidden = !conversation.isConnected || viewport.width === 0 || !lastLine ||
               lastLine.bottom < viewport.top || lastLine.bottom > viewport.bottom
             if (bubble.hidden) continue
-            bubble.style.left = Math.max(viewport.left + 4, Math.min(lastLine.right + 4, viewport.right - 28, window.innerWidth - 28)) + 'px'
-            bubble.style.top = Math.max(viewport.top, lastLine.top - 5) + 'px'
+            const left = Math.max(viewport.left + 4, Math.min(lastLine.right + 4, viewport.right - 28, window.innerWidth - 28))
+            const top = Math.max(viewport.top, lastLine.top - 5)
+            const composer = conversation.querySelector('[data-composer-seat]')?.getBoundingClientRect()
+            if (composer && composer.width > 0 && left < composer.right && left + 28 > composer.left &&
+                top < composer.bottom && top + 22 > composer.top) {
+              bubble.hidden = true
+              continue
+            }
+            bubble.style.left = left + 'px'
+            bubble.style.top = top + 'px'
           }
           if (removed) publishQuotes()
           if (!markers.size && markerTimer !== undefined) {
@@ -336,24 +344,106 @@ window.__ModuleLoader__.load({
             color: 'var(--dsw-alias-label-primary, CanvasText)'
           })
           let preview
+          let closeTimer
+          let editing = false
+          let text = selection.quote
           function hide() {
+            window.clearTimeout(closeTimer)
             preview?.remove()
             preview = undefined
+            editing = false
+          }
+          function scheduleHide() {
+            window.clearTimeout(closeTimer)
+            if (!editing) closeTimer = window.setTimeout(hide, 250)
+          }
+          function draftInput() {
+            const binding = ctx.sessions.binding(selection.parentId)
+            if (!binding) throw new Error('会话已关闭')
+            return ctx.conversation.input.for(binding.ctx)
+          }
+          function deleteQuote() {
+            if (!draftInput().removeAttachment(attachmentId)) throw new Error('输入框忙，请重试')
+            ctx.conversation.releaseDraftAttachments([{ id: attachmentId }])
+            updateMarkers()
+          }
+          function saveQuote(value) {
+            const input = draftInput()
+            const replacement = ctx.conversation.createDrafts(selection.parentId, [
+              new File([value + '\n'], `对话引用 ${number}.md`, { type: 'text/markdown' })
+            ])[0]
+            let attached = false
+            try {
+              attached = input.addAttachments([replacement.id])
+              if (!attached || !input.removeAttachment(attachmentId)) throw new Error('输入框忙，请重试')
+            } catch (error) {
+              if (attached) input.removeAttachment(replacement.id)
+              ctx.conversation.releaseDraftAttachments([replacement])
+              throw error
+            }
+            const marker = markers.get(attachmentId)
+            markers.delete(attachmentId)
+            ctx.conversation.releaseDraftAttachments([{ id: attachmentId }])
+            attachmentId = replacement.id
+            text = value
+            markers.set(attachmentId, { ...marker, attachmentId })
+            publishQuotes()
           }
           function show(anchor) {
+            if (editing) return
             hide()
             const anchorRect = anchor.getBoundingClientRect()
             preview = document.createElement('div')
-            preview.setAttribute('role', 'tooltip')
+            preview.setAttribute('role', 'group')
+            preview.setAttribute('aria-label', `引用 ${number} 预览`)
+            preview.addEventListener('mouseenter', () => window.clearTimeout(closeTimer))
+            preview.addEventListener('mouseleave', scheduleHide)
+            preview.addEventListener('focusin', () => window.clearTimeout(closeTimer))
+            const header = document.createElement('div')
+            header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px'
             const label = document.createElement('div')
             label.textContent = `${number}. 所选文字`
             label.style.cssText = 'font-size:12px;color:var(--dsw-alias-label-secondary);margin-bottom:4px'
             const content = document.createElement('div')
-            content.textContent = selection.quote
+            content.textContent = text
             content.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:6'
-            preview.append(label, content)
+            const controls = document.createElement('div')
+            controls.style.display = 'flex'
+            const status = document.createElement('div')
+            status.setAttribute('role', 'status')
+            function control(title, callback) {
+              const button = document.createElement('button')
+              button.type = 'button'
+              button.textContent = title
+              button.style.cssText = 'background:transparent;border:0;color:inherit;padding:3px 6px;cursor:pointer'
+              button.addEventListener('click', () => {
+                try { callback() } catch (error) { status.textContent = errorText(error) }
+              })
+              return button
+            }
+            controls.append(control('编辑', () => {
+              if (editing) return
+              editing = true
+              const field = document.createElement('textarea')
+              field.setAttribute('aria-label', '编辑引用内容')
+              field.rows = 4
+              field.maxLength = 6000
+              field.value = text
+              field.style.cssText = 'width:100%;box-sizing:border-box;background:transparent;color:inherit;font:inherit'
+              content.replaceWith(field)
+              controls.replaceChildren(control('保存', () => {
+                const value = field.value.trim()
+                if (!value) throw new Error('引用不能为空')
+                if (value !== text) saveQuote(value)
+                hide()
+                if (anchor.isConnected) show(anchor)
+              }), control('取消', () => { hide(); show(anchor) }))
+              field.focus()
+            }), control('删除', deleteQuote))
+            header.append(label, controls)
+            preview.append(header, content, status)
             Object.assign(preview.style, {
-              position: 'fixed', zIndex: '10000', pointerEvents: 'none',
+              position: 'fixed', zIndex: '10000',
               boxSizing: 'border-box', width: 'min(360px, calc(100vw - 16px))',
               padding: '10px 12px', borderRadius: '12px', fontSize: '13px',
               border: '1px solid var(--dsw-alias-border-l3, GrayText)',
@@ -375,10 +465,10 @@ window.__ModuleLoader__.load({
           }
           bubble.addEventListener('mouseenter', () => show(bubble))
           bubble.addEventListener('focus', () => show(bubble))
-          bubble.addEventListener('mouseleave', hide)
-          bubble.addEventListener('blur', hide)
+          bubble.addEventListener('mouseleave', scheduleHide)
+          bubble.addEventListener('blur', scheduleHide)
           bubble.addEventListener('click', jump)
-          markers.set(attachmentId, { ...selection, attachmentId, number, bubble, show, hide, jump })
+          markers.set(attachmentId, { ...selection, attachmentId, number, bubble, show, hide, scheduleHide, jump })
           publishQuotes()
           document.body.append(bubble)
           updateMarkers()

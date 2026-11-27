@@ -1,6 +1,6 @@
 {
   "name": "dsh-side-conversation",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "在 DeepSeek Harness 右侧从选中的回答继续追问",
   "type": "module",
   "main": "./index.js",
