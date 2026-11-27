@@ -13,6 +13,6 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 按 Enter 发送，Shift+Enter 换行，也可以点击「发送」按钮。
 
-新建的侧边分支会在发送消息前归档，因此默认不出现在左侧会话列表。DSH 的归档筛选仍能显示这些会话，插件不提供追问历史入口。此前创建的分支请通过 DSH 手动归档。
+侧边分支在打开时可以出现在左侧会话列表。关闭侧边标签后，插件会在分支空闲时尝试归档。DSH 的归档筛选仍能显示这些会话，插件不提供追问历史入口。
 
 追问页随 DSH 主题显示纯文本问答。附件、Markdown 格式、工具明细和审批请通过「打开完整会话」处理。无需 Atlas，无需构建。

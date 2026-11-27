@@ -197,6 +197,26 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       const emptyTabs = new Map()
+      const trackedTabs = new WeakSet()
+
+      function archiveWhenClosed(signal, childId) {
+        if (!signal || trackedTabs.has(signal)) return
+        trackedTabs.add(signal)
+        signal.addEventListener('abort', async () => {
+          for (let attempt = 0; attempt < 60; attempt += 1) {
+            try {
+              await ctx.uiWorkspace.archiveSession(childId)
+              return
+            } catch (error) {
+              if ((error.rpcError?.code ?? error.code) !== 'workspace/session-active') {
+                console.warn('[dsh-side-conversation] 归档失败', error)
+                return
+              }
+              await new Promise(resolve => window.setTimeout(resolve, 5000))
+            }
+          }
+        }, { once: true })
+      }
 
       function StartChat({ tab }) {
         const [draft, setDraft] = useState('')
@@ -223,13 +243,9 @@ window.__ModuleLoader__.load({
             if (pending.current && pending.current.parentId !== parentId) pending.current = null
             if (!pending.current) {
               const childId = await ctx.sessions.fork({ sessionId: parentId, atSeq })
-              pending.current = { parentId, childId, atSeq, archived: false }
+              pending.current = { parentId, childId, atSeq }
             }
             const branch = pending.current
-            if (!branch.archived) {
-              await ctx.uiWorkspace.archiveSession(branch.childId)
-              branch.archived = true
-            }
             const reference = ctx.sessions.retain(branch.childId, { source: id })
             try {
               const child = await reference.ready
@@ -238,9 +254,9 @@ window.__ModuleLoader__.load({
                 if (!result.ok) throw new Error(result.error?.message || 'DSH 未接受这条消息')
                 branch.sent = true
               }
-              if (activeSession(ctx.sessions) !== parentId) throw new Error('消息已发送，请切回原主聊天后重试打开')
-              ctx.sidebarRight.openTab(id, {
-                replaceTab: tab.id,
+              if (tab.signal.aborted) return
+              tab.actions.openTab(id, {
+                replaceTab: true,
                 params: { childId: branch.childId, atSeq: branch.atSeq, quote: '' }
               })
             } finally {
@@ -270,6 +286,9 @@ window.__ModuleLoader__.load({
       function SideTab({ useTabInfo }) {
         const { tab } = useTabInfo()
         const params = tab.navigation.params
+        useEffect(() => {
+          if (params?.childId) archiveWhenClosed(tab.signal, params.childId)
+        }, [params?.childId, tab.signal])
         useEffect(() => {
           if (params?.childId || !tab.visible) return
           const parentId = activeSession(ctx.sessions)
@@ -361,11 +380,6 @@ window.__ModuleLoader__.load({
           try {
             const childId = selection.childId ?? await ctx.sessions.fork({ sessionId: parentId, atSeq })
             selection.childId = childId
-            if (!selection.archived) {
-              button.textContent = '正在隐藏侧边分支…'
-              await ctx.uiWorkspace.archiveSession(childId)
-              selection.archived = true
-            }
             if (disposed || activeSession(ctx.sessions) !== parentId) return
             const emptyTab = emptyTabs.get(parentId)
             ctx.sidebarRight.openTab(id, {
