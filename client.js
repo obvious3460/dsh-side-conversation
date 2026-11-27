@@ -38,7 +38,6 @@ window.__ModuleLoader__.load({
       const trackedTabs = new WeakSet()
       const initializedQuotes = new Set()
       const markers = new Map()
-      const nextNumbers = new Map()
       const quoteListeners = new Set()
       let quoteSnapshot = []
       const subscribeQuotes = listener => {
@@ -48,7 +47,13 @@ window.__ModuleLoader__.load({
       const getQuotes = () => quoteSnapshot
 
       function publishQuotes() {
-        quoteSnapshot = [...markers.values()]
+        const counts = new Map()
+        quoteSnapshot = [...markers.values()].map(marker => {
+          const number = (counts.get(marker.parentId) ?? 0) + 1
+          counts.set(marker.parentId, number)
+          marker.setNumber(number)
+          return { ...marker, number }
+        })
         for (const listener of quoteListeners) listener()
       }
 
@@ -58,7 +63,7 @@ window.__ModuleLoader__.load({
         if (!current.length) return null
         return h('div', { role: 'group', 'aria-label': '跳转到对话引用', style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
           current.map(quote => h('button', {
-            key: quote.attachmentId, type: 'button',
+            key: quote.markerId, type: 'button',
             'aria-label': `跳转到引用 ${quote.number}`,
             style: {
               border: '1px solid var(--dsw-alias-border-l3)', borderRadius: '10px',
@@ -300,11 +305,11 @@ window.__ModuleLoader__.load({
 
         function updateMarkers() {
           let removed = false
-          for (const [attachmentId, { bubble, range, conversation, scroll, hide }] of markers) {
+          for (const [markerId, { attachmentId, bubble, range, conversation, scroll, hide }] of markers) {
             if (ctx.conversation.resolveDraftAttachments([attachmentId]).length === 0) {
               hide()
               bubble.remove()
-              markers.delete(attachmentId)
+              markers.delete(markerId)
               removed = true
               continue
             }
@@ -332,9 +337,9 @@ window.__ModuleLoader__.load({
           }
         }
 
-        function annotationFile(selection, number, note) {
+        function annotationFile(selection, note) {
           const text = '原文：\n' + quoteDraft(selection.quote) + '批注：\n' + note + '\n'
-          return new File([text], `对话引用 ${number}.md`, { type: 'text/markdown' })
+          return new File([text], '对话引用.md', { type: 'text/markdown' })
         }
 
         function placeAnnotation(card, anchorRect) {
@@ -352,11 +357,19 @@ window.__ModuleLoader__.load({
           card.style.top = Math.max(8, above >= 8 ? above : Math.min(anchorRect.bottom + 8, window.innerHeight - card.offsetHeight - 8)) + 'px'
         }
 
-        function addMarker(attachmentId, selection, number, note) {
+        function addMarker(attachmentId, selection, note) {
+          const markerId = attachmentId
+          let number
+          let previewLabel
           const bubble = document.createElement('button')
           bubble.type = 'button'
-          bubble.textContent = String(number)
-          bubble.setAttribute('aria-label', `跳转到引用 ${number}`)
+          function setNumber(value) {
+            number = value
+            bubble.textContent = String(value)
+            bubble.setAttribute('aria-label', `跳转到引用 ${value}`)
+            if (previewLabel) previewLabel.textContent = `${value}. 所选文字`
+            preview?.setAttribute('aria-label', `引用 ${value} 预览`)
+          }
           Object.assign(bubble.style, {
             position: 'fixed', zIndex: '9998', minWidth: '22px', height: '22px',
             borderRadius: '11px', cursor: 'pointer', fontSize: '11px', padding: '0 4px',
@@ -372,6 +385,7 @@ window.__ModuleLoader__.load({
             window.clearTimeout(closeTimer)
             preview?.remove()
             preview = undefined
+            previewLabel = undefined
             editing = false
           }
           function scheduleHide() {
@@ -391,7 +405,7 @@ window.__ModuleLoader__.load({
           function saveQuote(value) {
             const input = draftInput()
             const replacement = ctx.conversation.createDrafts(selection.parentId, [
-              annotationFile(selection, number, value)
+              annotationFile(selection, value)
             ])[0]
             let attached = false
             try {
@@ -402,12 +416,10 @@ window.__ModuleLoader__.load({
               ctx.conversation.releaseDraftAttachments([replacement])
               throw error
             }
-            const marker = markers.get(attachmentId)
-            markers.delete(attachmentId)
             ctx.conversation.releaseDraftAttachments([{ id: attachmentId }])
             attachmentId = replacement.id
             text = value
-            markers.set(attachmentId, { ...marker, attachmentId })
+            markers.get(markerId).attachmentId = attachmentId
             publishQuotes()
           }
           function show(anchor) {
@@ -423,6 +435,7 @@ window.__ModuleLoader__.load({
             const header = document.createElement('div')
             header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px'
             const label = document.createElement('div')
+            previewLabel = label
             label.textContent = `${number}. 所选文字`
             label.style.cssText = 'font-size:12px;color:var(--dsw-alias-label-secondary);margin-bottom:4px'
             const content = document.createElement('div')
@@ -480,7 +493,7 @@ window.__ModuleLoader__.load({
           bubble.addEventListener('mouseleave', scheduleHide)
           bubble.addEventListener('blur', scheduleHide)
           bubble.addEventListener('click', jump)
-          markers.set(attachmentId, { ...selection, attachmentId, number, bubble, show, hide, scheduleHide, jump })
+          markers.set(markerId, { ...selection, markerId, attachmentId, bubble, setNumber, show, hide, scheduleHide, jump })
           publishQuotes()
           document.body.append(bubble)
           updateMarkers()
@@ -493,8 +506,7 @@ window.__ModuleLoader__.load({
           const binding = ctx.sessions.binding(parentId)
           if (!binding) throw new Error('会话已关闭，请重新选择文字')
           const input = ctx.conversation.input.for(binding.ctx)
-          const number = (nextNumbers.get(parentId) ?? 0) + 1
-          const file = annotationFile(selection, number, note)
+          const file = annotationFile(selection, note)
           const drafts = ctx.conversation.createDrafts(parentId, [file])
           try {
             if (!input.addAttachments(drafts.map(draft => draft.id))) throw new Error('输入框忙，请重试')
@@ -502,8 +514,8 @@ window.__ModuleLoader__.load({
             ctx.conversation.releaseDraftAttachments(drafts)
             throw error
           }
-          nextNumbers.set(parentId, number)
-          addMarker(drafts[0].id, selection, number, note)
+          updateMarkers()
+          addMarker(drafts[0].id, selection, note)
         }
 
         function closeAnnotationEditor() {
