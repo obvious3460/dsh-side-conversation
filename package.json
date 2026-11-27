@@ -1,6 +1,6 @@
 {
   "name": "dsh-side-conversation",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "在 DeepSeek Harness 右侧从选中的回答继续追问",
   "type": "module",
   "main": "./index.js",
@@ -16,7 +16,7 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-api-session-controller",
-        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-sidebar-right",
         "@deepseek-ai/dsh-client-ui-workspace"
       ]
