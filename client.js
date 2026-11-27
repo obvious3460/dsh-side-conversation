@@ -2,7 +2,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-side-conversation',
   factory(require) {
     const React = require('react')
-    const { createElement: h, useEffect, useState, useRef, useSyncExternalStore } = React
+    const { createElement: h, useEffect, useState, useRef } = React
     const id = 'dsh-side-conversation'
     const seat = 'sidebar.right.pane.tab'
     const answer = '[data-chat-flow-kind="assistant-step"][data-chat-turn]'
@@ -14,7 +14,6 @@ window.__ModuleLoader__.load({
       ${turnRail} > [role="tooltip"] { width: min(300px, max(0px, calc(100cqw - 48px))); }
     `
     const errorText = error => error?.message || String(error)
-    const quoteDraft = quote => quote.split('\n').map(line => '> ' + line).join('\n') + '\n\n'
     function activeSession(sessions) {
       const list = sessions.list.getSnapshot()
       const active = Object.values(list.byId).filter(item => item.retainedBy?.mainView > 0)
@@ -36,46 +35,6 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const emptyTabs = new Map()
       const trackedTabs = new WeakSet()
-      const initializedQuotes = new Set()
-      const markers = new Map()
-      const quoteListeners = new Set()
-      let quoteSnapshot = []
-      const subscribeQuotes = listener => {
-        quoteListeners.add(listener)
-        return () => quoteListeners.delete(listener)
-      }
-      const getQuotes = () => quoteSnapshot
-
-      function publishQuotes() {
-        const counts = new Map()
-        quoteSnapshot = [...markers.values()].map(marker => {
-          const number = (counts.get(marker.parentId) ?? 0) + 1
-          counts.set(marker.parentId, number)
-          marker.setNumber(number)
-          return { ...marker, number }
-        })
-        for (const listener of quoteListeners) listener()
-      }
-
-      function QuoteNavigation({ sessionId }) {
-        const quotes = useSyncExternalStore(subscribeQuotes, getQuotes)
-        const current = quotes.filter(quote => quote.parentId === sessionId)
-        if (!current.length) return null
-        return h('div', { role: 'group', 'aria-label': '跳转到对话引用', style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
-          current.map(quote => h('button', {
-            key: quote.markerId, type: 'button',
-            'aria-label': `跳转到引用 ${quote.number}`,
-            style: {
-              border: '1px solid var(--dsw-alias-border-l3)', borderRadius: '10px',
-              padding: '1px 7px', background: 'var(--dsw-alias-bg-layer-1)',
-              color: 'var(--dsw-alias-label-primary)', cursor: 'pointer'
-            },
-            onMouseEnter: event => quote.show(event.currentTarget),
-            onFocus: event => quote.show(event.currentTarget),
-            onMouseLeave: quote.scheduleHide, onBlur: quote.scheduleHide, onClick: quote.jump
-          }, String(quote.number)))
-        )
-      }
       const storageKey = 'dsh-side-conversation.hidden-branches'
       const hiddenBranches = new Set()
       const rowStyle = document.createElement('style')
@@ -123,7 +82,7 @@ window.__ModuleLoader__.load({
         }, { once: true })
       }
 
-      function NativeChat({ childId, quote, SessionProvider, renderFactorySlot }) {
+      function NativeChat({ childId, SessionProvider, renderFactorySlot }) {
         const [reference, setReference] = useState(null)
         const [error, setError] = useState('')
         useEffect(() => {
@@ -131,14 +90,8 @@ window.__ModuleLoader__.load({
           let retained
           try {
             retained = ctx.sessions.retain(childId, { source: id })
-            retained.ready.then(binding => {
+            retained.ready.then(() => {
               if (!active) return
-              if (quote && !initializedQuotes.has(childId)) {
-                ctx.conversation.input.requestDraftInitialization(binding, {
-                  prompt: quoteDraft(quote)
-                })
-                initializedQuotes.add(childId)
-              }
               setReference(retained)
             }).catch(error => { if (active) setError(errorText(error)) })
           } catch (error) {
@@ -148,7 +101,7 @@ window.__ModuleLoader__.load({
             active = false
             retained?.release()
           }
-        }, [childId, quote])
+        }, [childId])
 
         if (!reference) return h('p', { role: 'status', style: { padding: 12 } }, error || '正在打开侧边会话…')
         return h('section', { 'aria-label': '侧边追问', 'data-dsh-side-chat': '', style: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' } },
@@ -219,7 +172,7 @@ window.__ModuleLoader__.load({
           }
         }, [params?.childId, tab.id, tab.visible])
         if (!params?.childId) return h(StartChat, { tab })
-        return h(NativeChat, { key: params.childId, childId: params.childId, quote: params.quote, SessionProvider, renderFactorySlot })
+        return h(NativeChat, { key: params.childId, childId: params.childId, SessionProvider, renderFactorySlot })
       }
 
       ctx.effect(() => ctx.sidebarRightTabs.register({
@@ -228,7 +181,7 @@ window.__ModuleLoader__.load({
           id: 'open',
           order: 40,
           title: () => '侧边追问',
-          description: () => '从主聊天选中一段回答，在侧边继续聊',
+          description: () => '从主聊天创建分支，在侧边继续聊',
           icon: ChatIcon
         }]
       }))
@@ -237,38 +190,28 @@ window.__ModuleLoader__.load({
         key: id,
         children: { 'dsh-side-conversation.scope': { kind: 'single', scope: 'session' } }
       }, SideTab))
-      ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-        name: 'conversation.composer.dock', id: 'dsh-side-conversation-quotes', order: -10
-      }, QuoteNavigation))
-
       ctx.effect(() => {
         let selected
         let opening = false
         let disposed = false
         let timer
-        let markerTimer
-        let annotationEditor
         const actions = document.createElement('div')
         actions.hidden = true
         actions.setAttribute('role', 'group')
         actions.setAttribute('aria-label', '所选文字操作')
         const button = document.createElement('button')
-        const addButton = document.createElement('button')
         button.textContent = '侧边追问'
-        addButton.textContent = '添加到聊天'
         Object.assign(actions.style, {
           position: 'fixed', zIndex: '9999', borderRadius: '8px',
           border: '1px solid var(--dsw-alias-border-l3, GrayText)',
           background: 'var(--dsw-alias-bg-layer-1, Canvas)',
           color: 'var(--dsw-alias-label-primary, CanvasText)'
         })
-        for (const action of [addButton, button]) {
-          action.type = 'button'
-          Object.assign(action.style, {
-            padding: '6px 10px', border: '0', background: 'transparent', color: 'inherit', cursor: 'pointer'
-          })
-        }
-        actions.append(addButton, button)
+        button.type = 'button'
+        Object.assign(button.style, {
+          padding: '6px 10px', border: '0', background: 'transparent', color: 'inherit', cursor: 'pointer'
+        })
+        actions.append(button)
         document.body.append(actions)
 
         function dismiss() {
@@ -278,7 +221,7 @@ window.__ModuleLoader__.load({
         }
 
         function showSelection() {
-          if (opening || annotationEditor) return
+          if (opening) return
           const selection = window.getSelection()
           if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return dismiss()
           const parent = node => node?.nodeType === 1 ? node : node?.parentElement
@@ -288,287 +231,22 @@ window.__ModuleLoader__.load({
           const scroll = start?.closest('[data-conversation-scroll]')
           if (!turn || !scroll || end?.closest('[data-conversation-scroll]') !== scroll || end?.dataset.chatTurn !== turn) return dismiss()
           const conversation = scroll.closest('[data-conversation-session]')
-          const quote = selection.toString().trim()
           const parentId = conversation?.dataset.conversationSession
-          if (!quote || !parentId) return dismiss()
+          if (!parentId || conversation.closest('[data-dsh-side-chat]') || !selection.toString().trim()) return dismiss()
           const range = selection.getRangeAt(0)
           const rect = range.getBoundingClientRect()
-          selected = { parentId, turn, quote: quote.slice(0, 6000), conversation, scroll, source: start, range: range.cloneRange() }
-          button.hidden = Boolean(conversation.closest('[data-dsh-side-chat]'))
+          selected = { parentId, turn }
           button.textContent = '侧边追问'
-          addButton.textContent = '添加到聊天'
-          addButton.title = ''
+          button.title = ''
           actions.hidden = false
           actions.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - actions.offsetWidth - 8)) + 'px'
           actions.style.top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 46)) + 'px'
         }
 
-        function updateMarkers() {
-          let removed = false
-          for (const [markerId, { attachmentId, bubble, range, conversation, scroll, hide }] of markers) {
-            if (ctx.conversation.resolveDraftAttachments([attachmentId]).length === 0) {
-              hide()
-              bubble.remove()
-              markers.delete(markerId)
-              removed = true
-              continue
-            }
-            const rect = range.getClientRects()
-            const lastLine = rect[rect.length - 1]
-            const viewport = scroll.getBoundingClientRect()
-            bubble.hidden = !conversation.isConnected || viewport.width === 0 || !lastLine ||
-              lastLine.bottom < viewport.top || lastLine.bottom > viewport.bottom
-            if (bubble.hidden) continue
-            const left = Math.max(viewport.left + 4, Math.min(lastLine.right + 4, viewport.right - 28, window.innerWidth - 28))
-            const top = Math.max(viewport.top, lastLine.top - 5)
-            const composer = conversation.querySelector('[data-composer-seat]')?.getBoundingClientRect()
-            if (composer && composer.width > 0 && left < composer.right && left + 28 > composer.left &&
-                top < composer.bottom && top + 22 > composer.top) {
-              bubble.hidden = true
-              continue
-            }
-            bubble.style.left = left + 'px'
-            bubble.style.top = top + 'px'
-          }
-          if (removed) publishQuotes()
-          if (!markers.size && markerTimer !== undefined) {
-            window.clearInterval(markerTimer)
-            markerTimer = undefined
-          }
-        }
-
-        function annotationFile(selection, note) {
-          const text = '原文：\n' + quoteDraft(selection.quote) + '批注：\n' + note + '\n'
-          return new File([text], '对话引用.md', { type: 'text/markdown' })
-        }
-
-        function placeAnnotation(card, anchorRect) {
-          Object.assign(card.style, {
-            position: 'fixed', zIndex: '10000', boxSizing: 'border-box',
-            width: 'min(360px, calc(100vw - 16px))', padding: '10px 12px', borderRadius: '12px', fontSize: '13px',
-            border: '1px solid var(--dsw-alias-border-l3, GrayText)',
-            boxShadow: 'var(--dsw-elevation-panel, 0 4px 16px #0003)',
-            background: 'var(--dsw-alias-bg-layer-1, Canvas)',
-            color: 'var(--dsw-alias-label-primary, CanvasText)'
-          })
-          if (!card.isConnected) document.body.append(card)
-          card.style.left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - card.offsetWidth - 8)) + 'px'
-          const above = anchorRect.top - card.offsetHeight - 8
-          card.style.top = Math.max(8, above >= 8 ? above : Math.min(anchorRect.bottom + 8, window.innerHeight - card.offsetHeight - 8)) + 'px'
-        }
-
-        function addMarker(attachmentId, selection, note) {
-          const markerId = attachmentId
-          let number
-          let previewLabel
-          const bubble = document.createElement('button')
-          bubble.type = 'button'
-          function setNumber(value) {
-            number = value
-            bubble.textContent = String(value)
-            bubble.setAttribute('aria-label', `跳转到引用 ${value}`)
-            if (previewLabel) previewLabel.textContent = `${value}. 所选文字`
-            preview?.setAttribute('aria-label', `引用 ${value} 预览`)
-          }
-          Object.assign(bubble.style, {
-            position: 'fixed', zIndex: '9998', minWidth: '22px', height: '22px',
-            borderRadius: '11px', cursor: 'pointer', fontSize: '11px', padding: '0 4px',
-            border: '1px solid var(--dsw-alias-border-l3, GrayText)',
-            background: 'var(--dsw-alias-bg-layer-1, Canvas)',
-            color: 'var(--dsw-alias-label-primary, CanvasText)'
-          })
-          let preview
-          let closeTimer
-          let editing = false
-          let text = note
-          function hide() {
-            window.clearTimeout(closeTimer)
-            preview?.remove()
-            preview = undefined
-            previewLabel = undefined
-            editing = false
-          }
-          function scheduleHide() {
-            window.clearTimeout(closeTimer)
-            if (!editing) closeTimer = window.setTimeout(hide, 250)
-          }
-          function draftInput() {
-            const binding = ctx.sessions.binding(selection.parentId)
-            if (!binding) throw new Error('会话已关闭')
-            return ctx.conversation.input.for(binding.ctx)
-          }
-          function deleteQuote() {
-            if (!draftInput().removeAttachment(attachmentId)) throw new Error('输入框忙，请重试')
-            ctx.conversation.releaseDraftAttachments([{ id: attachmentId }])
-            updateMarkers()
-          }
-          function saveQuote(value) {
-            const input = draftInput()
-            const replacement = ctx.conversation.createDrafts(selection.parentId, [
-              annotationFile(selection, value)
-            ])[0]
-            let attached = false
-            try {
-              attached = input.addAttachments([replacement.id])
-              if (!attached || !input.removeAttachment(attachmentId)) throw new Error('输入框忙，请重试')
-            } catch (error) {
-              if (attached) input.removeAttachment(replacement.id)
-              ctx.conversation.releaseDraftAttachments([replacement])
-              throw error
-            }
-            ctx.conversation.releaseDraftAttachments([{ id: attachmentId }])
-            attachmentId = replacement.id
-            text = value
-            markers.get(markerId).attachmentId = attachmentId
-            publishQuotes()
-          }
-          function show(anchor) {
-            if (editing) return
-            hide()
-            const anchorRect = anchor.getBoundingClientRect()
-            preview = document.createElement('div')
-            preview.setAttribute('role', 'group')
-            preview.setAttribute('aria-label', `引用 ${number} 预览`)
-            preview.addEventListener('mouseenter', () => window.clearTimeout(closeTimer))
-            preview.addEventListener('mouseleave', scheduleHide)
-            preview.addEventListener('focusin', () => window.clearTimeout(closeTimer))
-            const header = document.createElement('div')
-            header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px'
-            const label = document.createElement('div')
-            previewLabel = label
-            label.textContent = `${number}. 所选文字`
-            label.style.cssText = 'font-size:12px;color:var(--dsw-alias-label-secondary);margin-bottom:4px'
-            const content = document.createElement('div')
-            content.textContent = text
-            const source = document.createElement('blockquote')
-            source.textContent = selection.quote
-            source.style.cssText = 'margin:4px 0 8px;padding-left:8px;border-left:2px solid var(--dsw-alias-border-l3);max-height:5em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)'
-            content.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:6'
-            const controls = document.createElement('div')
-            controls.style.display = 'flex'
-            const status = document.createElement('div')
-            status.setAttribute('role', 'status')
-            function control(title, callback) {
-              const button = document.createElement('button')
-              button.type = 'button'
-              button.textContent = title
-              button.style.cssText = 'background:transparent;border:0;color:inherit;padding:3px 6px;cursor:pointer'
-              button.addEventListener('click', () => {
-                try { callback() } catch (error) { status.textContent = errorText(error) }
-              })
-              return button
-            }
-            controls.append(control('编辑', () => {
-              if (editing) return
-              editing = true
-              const field = document.createElement('textarea')
-              field.setAttribute('aria-label', '编辑引用内容')
-              field.rows = 4
-              field.maxLength = 6000
-              field.value = text
-              field.style.cssText = 'width:100%;box-sizing:border-box;background:transparent;color:inherit;font:inherit'
-              content.replaceWith(field)
-              controls.replaceChildren(control('保存', () => {
-                const value = field.value.trim()
-                if (!value) throw new Error('批注不能为空')
-                if (value !== text) saveQuote(value)
-                hide()
-                if (anchor.isConnected) show(anchor)
-              }), control('取消', () => { hide(); show(anchor) }))
-              field.focus()
-            }), control('删除', deleteQuote))
-            header.append(label, controls)
-            preview.append(header, source, content, status)
-            placeAnnotation(preview, anchorRect)
-          }
-          function jump() {
-            hide()
-            const target = selection.source.isConnected ? selection.source :
-              [...selection.conversation.querySelectorAll(answer)].find(row => row.dataset.chatTurn === selection.turn)
-            target?.scrollIntoView({ block: 'center', behavior: 'instant' })
-            target?.animate?.([{ backgroundColor: 'var(--dsw-alias-interactive-bg-hover)' }, { backgroundColor: 'transparent' }], 900)
-          }
-          bubble.addEventListener('mouseenter', () => show(bubble))
-          bubble.addEventListener('focus', () => show(bubble))
-          bubble.addEventListener('mouseleave', scheduleHide)
-          bubble.addEventListener('blur', scheduleHide)
-          bubble.addEventListener('click', jump)
-          markers.set(markerId, { ...selection, markerId, attachmentId, bubble, setNumber, show, hide, scheduleHide, jump })
-          publishQuotes()
-          document.body.append(bubble)
-          updateMarkers()
-          if (markers.size && markerTimer === undefined) markerTimer = window.setInterval(updateMarkers, 350)
-        }
-
-        function saveAnnotation(selection, note) {
-          const { parentId, conversation } = selection
-          if (!conversation.isConnected) throw new Error('原对话已关闭')
-          const binding = ctx.sessions.binding(parentId)
-          if (!binding) throw new Error('会话已关闭，请重新选择文字')
-          const input = ctx.conversation.input.for(binding.ctx)
-          const file = annotationFile(selection, note)
-          const drafts = ctx.conversation.createDrafts(parentId, [file])
-          try {
-            if (!input.addAttachments(drafts.map(draft => draft.id))) throw new Error('输入框忙，请重试')
-          } catch (error) {
-            ctx.conversation.releaseDraftAttachments(drafts)
-            throw error
-          }
-          updateMarkers()
-          addMarker(drafts[0].id, selection, note)
-        }
-
-        function closeAnnotationEditor() {
-          annotationEditor?.card.remove()
-          annotationEditor = undefined
-        }
-
-        function addToChat() {
-          if (!selected || opening || annotationEditor) return
-          const selection = selected
-          if (!selection.conversation.isConnected) return dismiss()
-          const card = document.createElement('form')
-          card.setAttribute('aria-label', '添加批注')
-          const row = document.createElement('div')
-          row.style.cssText = 'display:flex;align-items:center;gap:8px'
-          const field = document.createElement('textarea')
-          field.setAttribute('aria-label', '批注内容')
-          field.placeholder = '写下你的批注…'
-          field.rows = 2
-          field.maxLength = 6000
-          field.required = true
-          field.style.cssText = 'flex:1;min-width:0;box-sizing:border-box;resize:vertical;border:1px solid var(--dsw-alias-border-l3, GrayText);border-radius:6px;padding:5px 7px;background:transparent;color:inherit;font:inherit'
-          const status = document.createElement('div')
-          status.setAttribute('role', 'status')
-          const save = document.createElement('button')
-          save.type = 'submit'
-          save.textContent = '确定'
-          save.style.cssText = 'flex:none;padding:5px 10px;border:1px solid var(--dsw-alias-border-l3, GrayText);border-radius:6px;background:var(--dsw-alias-button-floating-fill, ButtonFace);color:inherit;font:inherit;white-space:nowrap;cursor:pointer'
-          card.addEventListener('submit', event => {
-            event.preventDefault()
-            const note = field.value.trim()
-            if (!note) { status.textContent = '请先输入批注'; return }
-            try {
-              saveAnnotation(selection, note)
-              closeAnnotationEditor()
-              selection.conversation.querySelector('[data-composer-input][contenteditable="true"]')?.focus()
-            } catch (error) {
-              status.textContent = errorText(error)
-            }
-          })
-          row.append(field, save)
-          card.append(row, status)
-          annotationEditor = { card, range: selection.range }
-          dismiss()
-          window.getSelection()?.removeAllRanges()
-          placeAnnotation(card, selection.range.getBoundingClientRect())
-          field.focus()
-        }
-
         async function openBranch() {
           if (!selected || opening) return
           const selection = selected
-          const { parentId, turn, quote } = selection
+          const { parentId, turn } = selection
           if (activeSession(ctx.sessions) !== parentId) return dismiss()
           const binding = ctx.sessions.binding(parentId)
           const atSeq = completedTurn(binding, turn)
@@ -592,7 +270,7 @@ window.__ModuleLoader__.load({
             const emptyTab = emptyTabs.get(parentId)
             ctx.sidebarRight.openTab(id, {
               ...(emptyTab === undefined ? {} : { replaceTab: emptyTab }),
-              params: { childId, atSeq, quote }
+              params: { childId }
             })
             selected = undefined
             actions.hidden = true
@@ -612,37 +290,23 @@ window.__ModuleLoader__.load({
           timer = window.setTimeout(showSelection, 90)
         }
         const preserve = event => event.preventDefault()
-        const hidePreviews = () => { for (const { hide } of markers.values()) hide() }
-        const escape = event => { if (event.key === 'Escape') { dismiss(); closeAnnotationEditor(); hidePreviews() } }
-        const onScroll = () => {
-          dismiss()
-          hidePreviews()
-          updateMarkers()
-          if (annotationEditor) placeAnnotation(annotationEditor.card, annotationEditor.range.getBoundingClientRect())
-        }
+        const escape = event => { if (event.key === 'Escape') dismiss() }
         actions.addEventListener('mousedown', preserve)
-        addButton.addEventListener('click', addToChat)
         button.addEventListener('click', openBranch)
         document.addEventListener('selectionchange', scheduleSelection)
         document.addEventListener('keydown', escape)
-        document.addEventListener('scroll', onScroll, true)
-        window.addEventListener('resize', updateMarkers)
+        document.addEventListener('scroll', dismiss, true)
         return () => {
           disposed = true
           window.clearTimeout(timer)
           document.removeEventListener('selectionchange', scheduleSelection)
           document.removeEventListener('keydown', escape)
-          document.removeEventListener('scroll', onScroll, true)
-          window.removeEventListener('resize', updateMarkers)
-          window.clearInterval(markerTimer)
-          for (const { bubble, hide } of markers.values()) { hide(); bubble.remove() }
-          markers.clear()
-          closeAnnotationEditor()
+          document.removeEventListener('scroll', dismiss, true)
           actions.remove()
         }
       })
     }
 
-    return { inject: ['sessions', 'slots', 'sidebarRightTabs', 'sidebarRight', 'uiWorkspace', 'conversation'], apply }
+    return { inject: ['sessions', 'slots', 'sidebarRightTabs', 'sidebarRight', 'uiWorkspace'], apply }
   }
 })
