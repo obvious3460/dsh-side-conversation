@@ -198,6 +198,33 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const emptyTabs = new Map()
       const trackedTabs = new WeakSet()
+      const storageKey = 'dsh-side-conversation.hidden-branches'
+      const hiddenBranches = new Set()
+      const rowStyle = document.createElement('style')
+      document.head.append(rowStyle)
+
+      function updateHiddenRows() {
+        rowStyle.textContent = [...hiddenBranches]
+          .filter(childId => typeof childId === 'string' && /^[a-z0-9_-]+$/i.test(childId))
+          .map(childId => `[data-row-key="session:${childId}"] { display: none !important; }`)
+          .join('\n')
+      }
+
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(storageKey) || '[]')
+        if (Array.isArray(saved)) saved.forEach(childId => hiddenBranches.add(childId))
+      } catch {}
+      updateHiddenRows()
+      ctx.effect(() => () => rowStyle.remove())
+
+      function hideBranch(childId) {
+        if (hiddenBranches.has(childId)) return
+        hiddenBranches.add(childId)
+        updateHiddenRows()
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify([...hiddenBranches]))
+        } catch {}
+      }
 
       function archiveWhenClosed(signal, childId) {
         if (!signal || trackedTabs.has(signal)) return
@@ -243,6 +270,7 @@ window.__ModuleLoader__.load({
             if (pending.current && pending.current.parentId !== parentId) pending.current = null
             if (!pending.current) {
               const childId = await ctx.sessions.fork({ sessionId: parentId, atSeq })
+              hideBranch(childId)
               pending.current = { parentId, childId, atSeq }
             }
             const branch = pending.current
@@ -287,7 +315,10 @@ window.__ModuleLoader__.load({
         const { tab } = useTabInfo()
         const params = tab.navigation.params
         useEffect(() => {
-          if (params?.childId) archiveWhenClosed(tab.signal, params.childId)
+          if (params?.childId) {
+            hideBranch(params.childId)
+            archiveWhenClosed(tab.signal, params.childId)
+          }
         }, [params?.childId, tab.signal])
         useEffect(() => {
           if (params?.childId || !tab.visible) return
@@ -379,6 +410,7 @@ window.__ModuleLoader__.load({
           button.textContent = '正在创建分支…'
           try {
             const childId = selection.childId ?? await ctx.sessions.fork({ sessionId: parentId, atSeq })
+            hideBranch(childId)
             selection.childId = childId
             if (disposed || activeSession(ctx.sessions) !== parentId) return
             const emptyTab = emptyTabs.get(parentId)
