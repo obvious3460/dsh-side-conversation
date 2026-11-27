@@ -161,15 +161,40 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function ChatIcon({ size = 22, className }) {
+      return h('svg', { width: size, height: size, className, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true },
+        h('path', { d: 'M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-4 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z M7 9h10 M7 13h6', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' })
+      )
+    }
+
     function apply(ctx) {
+      const emptyTabs = new Map()
+
       function SideTab({ useTabInfo }) {
-        const params = useTabInfo().tab.navigation.params
+        const { tab } = useTabInfo()
+        const params = tab.navigation.params
+        useEffect(() => {
+          if (params?.childId || !tab.visible) return
+          const parentId = activeSession(ctx.sessions)
+          if (!parentId) return
+          emptyTabs.set(parentId, tab.id)
+          return () => {
+            if (emptyTabs.get(parentId) === tab.id) emptyTabs.delete(parentId)
+          }
+        }, [params?.childId, tab.id, tab.visible])
         if (!params?.childId) return h('p', { style: { padding: 12 } }, '在主聊天中选中一段回答，然后点击「侧边追问」。')
         return h(BranchChat, { key: params.childId, ctx, ...params })
       }
 
       ctx.effect(() => ctx.sidebarRightTabs.register({
-        id, kind: id, multiple: true, title: () => '侧边追问'
+        id, kind: id, multiple: true, title: () => '侧边追问',
+        guide: [{
+          id: 'open',
+          order: 40,
+          title: () => '侧边追问',
+          description: () => '从主聊天选中一段回答，在侧边继续聊',
+          icon: ChatIcon
+        }]
       }))
       ctx.slots.inject(seat, () => ctx.slots.register({ name: seat, key: id }, SideTab))
 
@@ -236,7 +261,11 @@ window.__ModuleLoader__.load({
           try {
             const childId = await ctx.sessions.fork({ sessionId: parentId, atSeq })
             if (disposed || activeSession(ctx.sessions) !== parentId) return
-            ctx.sidebarRight.openTab(id, { params: { childId, atSeq, quote } })
+            const emptyTab = emptyTabs.get(parentId)
+            ctx.sidebarRight.openTab(id, {
+              ...(emptyTab === undefined ? {} : { replaceTab: emptyTab }),
+              params: { childId, atSeq, quote }
+            })
             selected = undefined
             button.hidden = true
           } catch (error) {
