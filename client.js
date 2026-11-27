@@ -129,7 +129,7 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           const hasPrompt = quoted || messages.some(message => message.author === '你')
-          const text = hasPrompt ? question : `关于以下选中的原对话内容：\n\n${quote.split('\n').map(line => '> ' + line).join('\n')}\n\n我的问题：${question}`
+          const text = hasPrompt || !quote ? question : `关于以下选中的原对话内容：\n\n${quote.split('\n').map(line => '> ' + line).join('\n')}\n\n我的问题：${question}`
           const result = await session.prompt([{ type: 'text', text }], 'queue')
           if (!result.ok) throw new Error(result.error?.message || 'DSH 未接受这条消息')
           setQuoted(true)
@@ -156,9 +156,9 @@ window.__ModuleLoader__.load({
           h('strong', null, '侧边追问'),
           h('button', { type: 'button', onClick: openChild }, '打开完整会话')
         ),
-        h('details', null,
+        quote ? h('details', null,
           h('summary', null, '选中的内容'), h('p', null, quote)
-        ),
+        ) : null,
         h('div', { role: 'log', 'aria-live': 'off', className: 'dsh-side-chat-log' },
           ...messages.map(message => h('article', {
             key: message.seq,
@@ -191,6 +191,75 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       const emptyTabs = new Map()
 
+      function StartChat({ tab }) {
+        const [draft, setDraft] = useState('')
+        const [busy, setBusy] = useState(false)
+        const [error, setError] = useState('')
+        const pending = useRef(null)
+        const lock = useRef(false)
+
+        async function start(event) {
+          event.preventDefault()
+          if (!draft.trim() || lock.current) return
+          lock.current = true
+          setBusy(true)
+          setError('')
+          try {
+            const parentId = activeSession(ctx.sessions)
+            const binding = parentId && ctx.sessions.binding(parentId)
+            if (!binding) throw new Error('请先打开一个已有的主聊天')
+            const state = binding.session.getSnapshot()
+            if (state.running || state.pendingSubmissions?.length) throw new Error('请等待主聊天空闲后再试')
+            const ends = binding.eventSource.getSnapshot().entries.filter(({ event }) => event.type === 'turn/end')
+            const atSeq = ends.at(-1)?.event.seq
+            if (!Number.isSafeInteger(atSeq)) throw new Error('请先完成主聊天中的一轮对话')
+            if (pending.current && pending.current.parentId !== parentId) pending.current = null
+            if (!pending.current) {
+              const childId = await ctx.sessions.fork({ sessionId: parentId, atSeq })
+              pending.current = { parentId, childId, atSeq, archived: false }
+            }
+            const branch = pending.current
+            if (!branch.archived) {
+              await ctx.uiWorkspace.archiveSession(branch.childId)
+              branch.archived = true
+            }
+            const reference = ctx.sessions.retain(branch.childId, { source: id })
+            try {
+              const child = await reference.ready
+              if (!branch.sent) {
+                const result = await child.session.prompt([{ type: 'text', text: draft.trim() }], 'queue')
+                if (!result.ok) throw new Error(result.error?.message || 'DSH 未接受这条消息')
+                branch.sent = true
+              }
+              if (activeSession(ctx.sessions) !== parentId) throw new Error('消息已发送，请从归档会话查看回复')
+              ctx.sidebarRight.openTab(id, {
+                replaceTab: tab.id,
+                params: { childId: branch.childId, atSeq: branch.atSeq, quote: '' }
+              })
+            } finally {
+              reference.release()
+            }
+          } catch (error) {
+            setError(errorText(error))
+          } finally {
+            lock.current = false
+            setBusy(false)
+          }
+        }
+
+        return h('section', { className: 'dsh-side-chat', 'aria-label': '侧边追问' },
+          h('style', null, panelStyle),
+          h('div', { className: 'dsh-side-chat-log' },
+            h('p', { className: 'dsh-side-chat-muted' }, '输入问题，从当前主聊天继续追问。')
+          ),
+          h('div', { role: 'status', className: 'dsh-side-chat-muted' }, error),
+          h('form', { onSubmit: start },
+            h('textarea', { 'aria-label': '追问内容', placeholder: '输入追问…', rows: 3, value: draft, onChange: event => setDraft(event.target.value) }),
+            h('button', { type: 'submit', disabled: busy || !draft.trim() }, busy ? '正在发送…' : '发送')
+          )
+        )
+      }
+
       function SideTab({ useTabInfo }) {
         const { tab } = useTabInfo()
         const params = tab.navigation.params
@@ -203,7 +272,7 @@ window.__ModuleLoader__.load({
             if (emptyTabs.get(parentId) === tab.id) emptyTabs.delete(parentId)
           }
         }, [params?.childId, tab.id, tab.visible])
-        if (!params?.childId) return h('p', { style: { padding: 12 } }, '在主聊天中选中一段回答，然后点击「侧边追问」。')
+        if (!params?.childId) return h(StartChat, { tab })
         return h(BranchChat, { key: params.childId, ctx, ...params })
       }
 
