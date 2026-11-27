@@ -14,6 +14,7 @@ window.__ModuleLoader__.load({
       ${turnRail} > [role="tooltip"] { width: min(300px, max(0px, calc(100cqw - 48px))); }
     `
     const errorText = error => error?.message || String(error)
+    const quoteDraft = quote => quote.split('\n').map(line => '> ' + line).join('\n') + '\n\n'
     function activeSession(sessions) {
       const list = sessions.list.getSnapshot()
       const active = Object.values(list.byId).filter(item => item.retainedBy?.mainView > 0)
@@ -95,7 +96,7 @@ window.__ModuleLoader__.load({
               if (!active) return
               if (quote && !initializedQuotes.has(childId)) {
                 ctx.conversation.input.requestDraftInitialization(binding, {
-                  prompt: quote.split('\n').map(line => '> ' + line).join('\n') + '\n\n'
+                  prompt: quoteDraft(quote)
                 })
                 initializedQuotes.add(childId)
               }
@@ -203,22 +204,33 @@ window.__ModuleLoader__.load({
         let opening = false
         let disposed = false
         let timer
+        const actions = document.createElement('div')
+        actions.hidden = true
+        actions.setAttribute('role', 'group')
+        actions.setAttribute('aria-label', '所选文字操作')
         const button = document.createElement('button')
-        button.type = 'button'
+        const addButton = document.createElement('button')
         button.textContent = '侧边追问'
-        button.hidden = true
-        Object.assign(button.style, {
-          position: 'fixed', zIndex: '9999', padding: '6px 12px', borderRadius: '8px',
+        addButton.textContent = '添加到聊天'
+        Object.assign(actions.style, {
+          position: 'fixed', zIndex: '9999', borderRadius: '8px',
           border: '1px solid var(--dsw-alias-border-l3, GrayText)',
           background: 'var(--dsw-alias-bg-layer-1, Canvas)',
-          color: 'var(--dsw-alias-label-primary, CanvasText)', cursor: 'pointer'
+          color: 'var(--dsw-alias-label-primary, CanvasText)'
         })
-        document.body.append(button)
+        for (const action of [addButton, button]) {
+          action.type = 'button'
+          Object.assign(action.style, {
+            padding: '6px 10px', border: '0', background: 'transparent', color: 'inherit', cursor: 'pointer'
+          })
+        }
+        actions.append(addButton, button)
+        document.body.append(actions)
 
         function dismiss() {
           if (opening) return
           selected = undefined
-          button.hidden = true
+          actions.hidden = true
         }
 
         function showSelection() {
@@ -230,17 +242,44 @@ window.__ModuleLoader__.load({
           const end = parent(selection.focusNode)?.closest(answer)
           const turn = start?.dataset.chatTurn
           const scroll = start?.closest('[data-conversation-scroll]')
-          if (start?.closest('[data-dsh-side-chat]')) return dismiss()
           if (!turn || !scroll || end?.closest('[data-conversation-scroll]') !== scroll || end?.dataset.chatTurn !== turn) return dismiss()
+          const conversation = scroll.closest('[data-conversation-session]')
           const quote = selection.toString().trim()
-          const parentId = activeSession(ctx.sessions)
+          const parentId = conversation?.dataset.conversationSession
           if (!quote || !parentId) return dismiss()
           const rect = selection.getRangeAt(0).getBoundingClientRect()
-          selected = { parentId, turn, quote: quote.slice(0, 6000) }
+          selected = { parentId, turn, quote: quote.slice(0, 6000), conversation }
+          button.hidden = Boolean(conversation.closest('[data-dsh-side-chat]'))
           button.textContent = '侧边追问'
-          button.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 170)) + 'px'
-          button.style.top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 46)) + 'px'
-          button.hidden = false
+          addButton.textContent = '添加到聊天'
+          addButton.title = ''
+          actions.hidden = false
+          actions.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - actions.offsetWidth - 8)) + 'px'
+          actions.style.top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 46)) + 'px'
+        }
+
+        function addToChat() {
+          if (!selected || opening) return
+          const { parentId, quote, conversation } = selected
+          if (!conversation.isConnected) return dismiss()
+          try {
+            const binding = ctx.sessions.binding(parentId)
+            if (!binding) throw new Error('会话已关闭，请重新选择文字')
+            const result = ctx.conversation.input.requestDraftInitialization(binding, {
+              prompt: quoteDraft(quote),
+              whenDraftExists: 'append'
+            })
+            if (result === 'blocked') {
+              addButton.textContent = '输入框忙，请重试'
+              return
+            }
+            window.getSelection()?.removeAllRanges()
+            dismiss()
+            conversation.querySelector('[data-composer-input][contenteditable="true"]')?.focus()
+          } catch (error) {
+            addButton.textContent = '添加失败，点击重试'
+            addButton.title = errorText(error)
+          }
         }
 
         async function openBranch() {
@@ -273,7 +312,7 @@ window.__ModuleLoader__.load({
               params: { childId, atSeq, quote }
             })
             selected = undefined
-            button.hidden = true
+            actions.hidden = true
           } catch (error) {
             button.textContent = '创建失败，点击重试'
             button.title = errorText(error)
@@ -291,7 +330,8 @@ window.__ModuleLoader__.load({
         }
         const preserve = event => event.preventDefault()
         const escape = event => { if (event.key === 'Escape') dismiss() }
-        button.addEventListener('mousedown', preserve)
+        actions.addEventListener('mousedown', preserve)
+        addButton.addEventListener('click', addToChat)
         button.addEventListener('click', openBranch)
         document.addEventListener('selectionchange', scheduleSelection)
         document.addEventListener('keydown', escape)
@@ -302,7 +342,7 @@ window.__ModuleLoader__.load({
           document.removeEventListener('selectionchange', scheduleSelection)
           document.removeEventListener('keydown', escape)
           document.removeEventListener('scroll', dismiss, true)
-          button.remove()
+          actions.remove()
         }
       })
     }
