@@ -6,6 +6,13 @@ window.__ModuleLoader__.load({
     const id = 'dsh-side-conversation'
     const seat = 'sidebar.right.pane.tab'
     const answer = '[data-chat-flow-kind="assistant-step"][data-chat-turn]'
+    // DSH 0.2.1 hides its TurnNavigator in narrow conversation containers.
+    // Match the navigator's structure without tying the override to a CSS build hash.
+    const turnRail = '[data-dsh-side-chat] div[class$="_slot"] > nav[class$="_frame"]:has(> div[class*="_scroller"] > div[class$="_marks"])'
+    const turnRailStyles = `
+      ${turnRail} { display: block !important; right: 4px; width: 22px; }
+      ${turnRail} > [role="tooltip"] { width: min(300px, max(0px, calc(100cqw - 48px))); }
+    `
     const errorText = error => error?.message || String(error)
     function activeSession(sessions) {
       const list = sessions.list.getSnapshot()
@@ -108,7 +115,8 @@ window.__ModuleLoader__.load({
           h(SessionProvider, { session: reference },
             renderFactorySlot('conversation.content', { variant: 'embedded', phase: 'active', hero: false },
               { fallback: h('p', { role: 'status' }, '当前 DSH 版本未提供原生聊天输入栏') })
-          )
+          ),
+          h('style', null, turnRailStyles)
         )
       }
 

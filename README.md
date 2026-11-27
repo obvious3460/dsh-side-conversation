@@ -15,4 +15,4 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 插件创建的侧边分支会从当前 DSH 客户端的左侧会话列表隐藏。关闭侧边标签后，插件会在分支空闲时尝试归档。旧版已关闭的分支需要在 DSH 中手动归档。
 
-侧边会话使用 DSH 原生聊天视图并跟随主题。无需 Atlas，无需构建。
+侧边会话使用 DSH 原生聊天视图并跟随主题。会话有至少两轮时，右侧显示原生时间轴，悬停可预览，点击可跳转。无需 Atlas，无需构建。
